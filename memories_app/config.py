@@ -45,12 +45,24 @@ class FiltersConfig(BaseModel):
     max_album_lookups_per_memory: int = 12
 
 
+class EnricherConfig(BaseModel):
+    """Phase 2 LLM enrichment settings."""
+    
+    enabled: bool = True
+    poll_interval_minutes: int = 30
+    nas_url: str = "http://hide-server:8080"
+    vision_model: str = "qwen2.5vl:7b"
+    fallback_model: str = "moondream2"
+    timeout_seconds: int = 60
+
+
 class AppConfig(BaseModel):
     immich: ImmichConfig
     ntfy: NtfyConfig
     scout: ScoutConfig = Field(default_factory=ScoutConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     filters: FiltersConfig = Field(default_factory=FiltersConfig)
+    enricher: EnricherConfig = Field(default_factory=EnricherConfig)
     queue_db_path: str = "data/queue.sqlite"
 
 

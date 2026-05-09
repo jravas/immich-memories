@@ -1,5 +1,6 @@
 fastapi
 httpx
+ollama
 pydantic
 pyyaml
 reverse_geocoder

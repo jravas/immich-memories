@@ -25,3 +25,11 @@ scheduler:
   sender_cron: "*/10 * * * *"
 
 queue_db_path: "data/queue.sqlite"
+
+enricher:
+  enabled: true
+  poll_interval_minutes: 30
+  nas_url: "http://hide-server:8080"
+  vision_model: "qwen2.5vl:7b"
+  fallback_model: "moondream2"
+  timeout_seconds: 60

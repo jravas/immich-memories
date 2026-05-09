@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Dict
 
 import structlog
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
+from pydantic import BaseModel
 
 from memories_app.config import load_config
 from memories_app.db import connect, ensure_schema
@@ -17,6 +19,14 @@ connection = connect(config.queue_db_path)
 ensure_schema(connection)
 
 app = FastAPI()
+
+
+class QueueUpdateRequest(BaseModel):
+    """Request model for updating queue entries."""
+    memory_id: str
+    asset_id: str
+    caption: str
+    status: str
 
 
 @app.post("/hide")
@@ -36,3 +46,58 @@ def hide(memory_id: str = Query(..., min_length=1)) -> dict[str, str]:
     connection.commit()
     logger.info("hide_server.hidden", memory_id=memory_id)
     return {"status": "ok"}
+
+
+@app.get("/queue/pending")
+def get_pending_memories() -> list[Dict[str, Any]]:
+    """Get memories that are pending enrichment."""
+    cursor = connection.execute(
+        """
+        SELECT 
+            id, memory_id, memory_date, year, asset_id, score, city, 
+            caption, status, enriched_at, sent_at, created_at
+        FROM queue 
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        """
+    )
+    memories = []
+    for row in cursor.fetchall():
+        memory = dict(row)
+        # For Phase 2, we need candidate asset IDs - for now use the current asset_id
+        # In a full implementation, scout would store multiple candidates
+        memory["candidate_asset_ids"] = [memory["asset_id"]]
+        memories.append(memory)
+    
+    logger.info("hide_server.pending_fetched", count=len(memories))
+    return memories
+
+
+@app.post("/queue/update")
+def update_memory(request: QueueUpdateRequest) -> dict[str, str]:
+    """Update a memory with enrichment results."""
+    try:
+        connection.execute(
+            """
+            UPDATE queue
+            SET asset_id = ?, caption = ?, status = ?, enriched_at = CURRENT_TIMESTAMP
+            WHERE memory_id = ? AND status = 'pending'
+            """,
+            (request.asset_id, request.caption, request.status, request.memory_id),
+        )
+        connection.commit()
+        
+        if connection.total_changes == 0:
+            raise HTTPException(status_code=404, detail="Memory not found or not pending")
+        
+        logger.info("hide_server.memory_updated", 
+                   memory_id=request.memory_id,
+                   asset_id=request.asset_id,
+                   status=request.status)
+        return {"status": "ok"}
+        
+    except Exception as e:
+        logger.error("hide_server.update_failed", 
+                    memory_id=request.memory_id,
+                    error=str(e))
+        raise HTTPException(status_code=500, detail="Update failed")
