@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 from datetime import date
 
@@ -70,6 +71,7 @@ def main() -> None:
                 continue
 
             chosen_asset = pick_asset(memory)
+            candidate_assets = get_candidate_assets(memory)
             city = detect_city(memory)
             title = make_title(memory.memoryAt, today, city)
             caption = make_caption(memory, city, album_display, today)
@@ -78,6 +80,7 @@ def main() -> None:
                 "scout.selected",
                 memory_id=memory.id,
                 asset_id=chosen_asset.id,
+                candidate_count=len(candidate_assets),
                 score=score,
                 title=title,
                 caption=caption,
@@ -92,6 +95,7 @@ def main() -> None:
                 memory_date=memory.memoryAt,
                 year=memory.year,
                 asset_id=chosen_asset.id,
+                candidate_assets=[asset.id for asset in candidate_assets],
                 score=score,
                 city=city,
                 caption=caption,
@@ -114,6 +118,7 @@ def fetch_memories(client: httpx.Client, base_url: str, api_key: str, for_date: 
 
 
 def pick_asset(memory: Memory) -> Asset:
+    """Pick the single best asset for Phase 1 compatibility."""
     starred = [asset for asset in memory.assets if asset.isFavorite]
     if starred:
         return starred[0]
@@ -133,6 +138,48 @@ def pick_asset(memory: Memory) -> Asset:
         return with_gps[0]
 
     return random.choice(memory.assets)
+
+
+def get_candidate_assets(memory: Memory, max_candidates: int = 5) -> list[Asset]:
+    """Get top candidate assets for Phase 2 LLM enrichment."""
+    candidates = []
+    
+    # Priority 1: Starred photos
+    starred = [asset for asset in memory.assets if asset.isFavorite]
+    candidates.extend(starred[:max_candidates])
+    
+    if len(candidates) >= max_candidates:
+        return candidates[:max_candidates]
+    
+    # Priority 2: Photos with faces (sorted by face count)
+    with_faces = sorted(
+        [asset for asset in memory.assets if asset.face_count > 0 and asset not in candidates],
+        key=lambda asset: asset.face_count,
+        reverse=True
+    )
+    candidates.extend(with_faces[:max_candidates - len(candidates)])
+    
+    if len(candidates) >= max_candidates:
+        return candidates[:max_candidates]
+    
+    # Priority 3: Photos with GPS
+    with_gps = [
+        asset for asset in memory.assets 
+        if asset.has_gps and asset not in candidates
+    ]
+    candidates.extend(with_gps[:max_candidates - len(candidates)])
+    
+    if len(candidates) >= max_candidates:
+        return candidates[:max_candidates]
+    
+    # Priority 4: Random selection to fill remaining slots
+    remaining = [
+        asset for asset in memory.assets 
+        if asset not in candidates
+    ]
+    candidates.extend(random.sample(remaining, min(max_candidates - len(candidates), len(remaining))))
+    
+    return candidates[:max_candidates]
 
 
 def _distance_to_centroid(centroid: tuple[float, float], asset: Asset) -> float:
@@ -223,21 +270,24 @@ def upsert_queue_item(
     memory_date: str,
     year: int,
     asset_id: str,
+    candidate_assets: list[str] | None = None,
     score: int,
     city: str | None,
     caption: str,
 ) -> None:
+    candidate_json = json.dumps(candidate_assets) if candidate_assets else None
     connection.execute(
         """
-        INSERT INTO queue(memory_id, memory_date, year, asset_id, score, city, caption, status)
-        VALUES(?, ?, ?, ?, ?, ?, ?, 'pending')
+        INSERT INTO queue(memory_id, memory_date, year, asset_id, candidate_assets, score, city, caption, status)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending')
         ON CONFLICT(memory_id) DO UPDATE SET
           asset_id = excluded.asset_id,
+          candidate_assets = excluded.candidate_assets,
           score = excluded.score,
           city = excluded.city,
           caption = excluded.caption
         """,
-        (memory_id, memory_date, year, asset_id, score, city, caption),
+        (memory_id, memory_date, year, asset_id, candidate_json, score, city, caption),
     )
     connection.commit()
 

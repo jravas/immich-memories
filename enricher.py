@@ -5,6 +5,7 @@ Phase 2 LLM Enricher - runs on Framework desktop, enhances queued memories with 
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -37,6 +38,7 @@ class Enricher:
         self.nas_client = httpx.Client(
             base_url=self.enricher_config.nas_url,
             timeout=30.0,
+            headers={"Authorization": f"Bearer {self.enricher_config.shared_secret}"}
         )
         self.immich_client = httpx.Client(
             base_url=self.config.immich.base_url,
@@ -50,6 +52,12 @@ class Enricher:
             response = self.nas_client.get("/queue/pending")
             response.raise_for_status()
             return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error("enricher.http_error", status_code=e.response.status_code, error=str(e))
+            return []
+        except httpx.RequestError as e:
+            logger.error("enricher.network_error", error=str(e))
+            return []
         except Exception as e:
             logger.error("enricher.failed_to_fetch_pending", error=str(e))
             return []
@@ -61,10 +69,14 @@ class Enricher:
             try:
                 response = self.immich_client.get(
                     f"/api/assets/{asset_id}/thumbnail",
-                    params={"size": "preview"}  # Larger than thumbnail for better AI analysis
+                    params={"size": "preview"},  # Larger than thumbnail for better AI analysis
                 )
                 response.raise_for_status()
                 thumbnails.append(response.content)
+            except httpx.HTTPStatusError as e:
+                logger.warning("enricher.thumbnail_http_error", asset_id=asset_id, status_code=e.response.status_code, error=str(e))
+            except httpx.RequestError as e:
+                logger.warning("enricher.thumbnail_network_error", asset_id=asset_id, error=str(e))
             except Exception as e:
                 logger.warning("enricher.failed_thumbnail", asset_id=asset_id, error=str(e))
         return thumbnails
@@ -111,7 +123,7 @@ Rules:
         for i, thumbnail in enumerate(thumbnails):
             message["content"].append({
                 "type": "image_url",
-                "image_url": f"data:image/jpeg;base64,{thumbnail.hex()}"
+                "image_url": f"data:image/jpeg;base64,{base64.b64encode(thumbnail).decode()}"
             })
 
         try:
@@ -128,29 +140,53 @@ Rules:
             
             return EnrichmentResponse.model_validate_json(response.message.content)
             
-        except Exception as e:
+        except ollama.ResponseError as e:
+            logger.error("enricher.model_not_found", model=self.enricher_config.vision_model, error=str(e))
+            # Model doesn't exist, try fallback immediately
+        except (ollama.RequestError, ollama.OllamaError) as e:
             logger.warning("enricher.primary_model_failed", model=self.enricher_config.vision_model, error=str(e))
+            # Network or server error, try fallback
+        except ValidationError as e:
+            logger.error("enricher.invalid_response", model=self.enricher_config.vision_model, error=str(e))
+            # Invalid JSON response, try fallback
+        except Exception as e:
+            logger.error("enricher.unexpected_error", model=self.enricher_config.vision_model, error=str(e))
+            # Unexpected error, try fallback
             
-            # Try fallback model
-            try:
-                response = ollama.chat(
-                    model=self.enricher_config.fallback_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        message,
-                    ],
-                    format="json",
-                    options={"temperature": 0.1},
-                )
-                
-                return EnrichmentResponse.model_validate_json(response.message.content)
-                
-            except Exception as fallback_error:
-                logger.error("enricher.both_models_failed", 
-                           primary=self.enricher_config.vision_model,
-                           fallback=self.enricher_config.fallback_model,
-                           error=str(fallback_error))
-                return None
+        # Try fallback model
+        try:
+            response = ollama.chat(
+                model=self.enricher_config.fallback_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    message,
+                ],
+                format="json",
+                options={"temperature": 0.1},
+            )
+            
+            return EnrichmentResponse.model_validate_json(response.message.content)
+            
+        except ollama.ResponseError as e:
+            logger.error("enricher.fallback_model_not_found", 
+                       model=self.enricher_config.fallback_model, 
+                       error=str(e))
+            return None
+        except (ollama.RequestError, ollama.OllamaError) as e:
+            logger.error("enricher.fallback_model_failed", 
+                       model=self.enricher_config.fallback_model,
+                       error=str(e))
+            return None
+        except ValidationError as e:
+            logger.error("enricher.fallback_invalid_response", 
+                       model=self.enricher_config.fallback_model,
+                       error=str(e))
+            return None
+        except Exception as e:
+            logger.error("enricher.fallback_unexpected_error", 
+                       model=self.enricher_config.fallback_model,
+                       error=str(e))
+            return None
 
     def update_memory(self, memory_id: str, enrichment: EnrichmentResponse, chosen_asset_id: str) -> bool:
         """Update memory on NAS with enrichment results."""
@@ -166,6 +202,12 @@ Rules:
             )
             response.raise_for_status()
             return True
+        except httpx.HTTPStatusError as e:
+            logger.error("enricher.update_http_error", memory_id=memory_id, status_code=e.response.status_code, error=str(e))
+            return False
+        except httpx.RequestError as e:
+            logger.error("enricher.update_network_error", memory_id=memory_id, error=str(e))
+            return False
         except Exception as e:
             logger.error("enricher.failed_to_update", memory_id=memory_id, error=str(e))
             return False

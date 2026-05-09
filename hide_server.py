@@ -4,7 +4,8 @@ import os
 from typing import Any, Dict
 
 import structlog
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Depends, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from memories_app.config import load_config
@@ -19,6 +20,21 @@ connection = connect(config.queue_db_path)
 ensure_schema(connection)
 
 app = FastAPI()
+security = HTTPBearer()
+
+
+def verify_enricher_auth(credentials: HTTPAuthorizationCredentials = Security(security)) -> bool:
+    """Verify that the request has a valid enricher shared secret."""
+    expected_secret = config.enricher.shared_secret
+    if not expected_secret:
+        logger.warning("hide_server.no_enricher_secret_configured")
+        return False
+    
+    if credentials.credentials != expected_secret:
+        logger.warning("hide_server.invalid_auth", token=credentials.credentials[:8] + "...")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    
+    return True
 
 
 class QueueUpdateRequest(BaseModel):
@@ -49,12 +65,12 @@ def hide(memory_id: str = Query(..., min_length=1)) -> dict[str, str]:
 
 
 @app.get("/queue/pending")
-def get_pending_memories() -> list[Dict[str, Any]]:
+def get_pending_memories(authenticated: bool = Depends(verify_enricher_auth)) -> list[Dict[str, Any]]:
     """Get memories that are pending enrichment."""
     cursor = connection.execute(
         """
         SELECT 
-            id, memory_id, memory_date, year, asset_id, score, city, 
+            id, memory_id, memory_date, year, asset_id, candidate_assets, score, city, 
             caption, status, enriched_at, sent_at, created_at
         FROM queue 
         WHERE status = 'pending'
@@ -64,9 +80,19 @@ def get_pending_memories() -> list[Dict[str, Any]]:
     memories = []
     for row in cursor.fetchall():
         memory = dict(row)
-        # For Phase 2, we need candidate asset IDs - for now use the current asset_id
-        # In a full implementation, scout would store multiple candidates
-        memory["candidate_asset_ids"] = [memory["asset_id"]]
+        
+        # Parse candidate assets from JSON, fallback to current asset_id
+        if memory["candidate_assets"]:
+            try:
+                import json
+                memory["candidate_asset_ids"] = json.loads(memory["candidate_assets"])
+            except (json.JSONDecodeError, TypeError):
+                memory["candidate_asset_ids"] = [memory["asset_id"]]
+        else:
+            memory["candidate_asset_ids"] = [memory["asset_id"]]
+        
+        # Remove the raw candidate_assets field for cleaner API
+        del memory["candidate_assets"]
         memories.append(memory)
     
     logger.info("hide_server.pending_fetched", count=len(memories))
@@ -74,7 +100,7 @@ def get_pending_memories() -> list[Dict[str, Any]]:
 
 
 @app.post("/queue/update")
-def update_memory(request: QueueUpdateRequest) -> dict[str, str]:
+def update_memory(request: QueueUpdateRequest, authenticated: bool = Depends(verify_enricher_auth)) -> dict[str, str]:
     """Update a memory with enrichment results."""
     try:
         connection.execute(

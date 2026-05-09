@@ -54,6 +54,7 @@ class EnricherConfig(BaseModel):
     vision_model: str = "qwen2.5vl:7b"
     fallback_model: str = "moondream2"
     timeout_seconds: int = 60
+    shared_secret: str = "${ENRICHER_SECRET}"
 
 
 class AppConfig(BaseModel):

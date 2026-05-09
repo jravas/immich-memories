@@ -21,6 +21,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
           memory_date TEXT NOT NULL,
           year INTEGER NOT NULL,
           asset_id TEXT NOT NULL,
+          candidate_assets TEXT,
           score INTEGER NOT NULL,
           city TEXT,
           caption TEXT NOT NULL,
@@ -37,4 +38,11 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
-    connection.commit()
+    
+    # Add candidate_assets column if it doesn't exist (for existing databases)
+    try:
+        connection.execute("ALTER TABLE queue ADD COLUMN candidate_assets TEXT")
+        connection.commit()
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
