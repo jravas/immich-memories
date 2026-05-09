@@ -29,44 +29,35 @@ Silence is a feature. The notification arrives only when something interesting h
 
 Two cooperating containers on the always-on NAS, plus an opportunistic LLM worker on the Framework Desktop.
 
-```
-┌─────────────────── NAS (always on) ───────────────────┐
-│                                                       │
-│   ┌────────────┐    ┌──────────────────────────┐      │
-│   │   Immich   │◄───│  scout (daily cron)      │      │
-│   └────────────┘    │  - fetch memories        │      │
-│                     │  - score them            │      │
-│                     │  - enqueue if special    │      │
-│                     └──────────┬───────────────┘      │
-│                                │                      │
-│                                ▼                      │
-│                     ┌──────────────────────┐          │
-│                     │   queue.sqlite       │          │
-│                     │   (pending / sent /  │          │
-│                     │    hidden / blocked) │          │
-│                     └──────────┬───────────┘          │
-│                                │                      │
-│   ┌────────────┐    ┌──────────▼───────────┐          │
-│   │    ntfy    │◄───│  sender              │          │
-│   └────────────┘    │  - drains queue      │          │
-│                     │  - posts to ntfy     │          │
-│                     └──────────────────────┘          │
-└───────────────────────────────────────────────────────┘
-                           ▲
-                           │ Tailscale, opportunistic
-                           ▼
-┌────────────── Framework Desktop (sometimes on) ───────┐
-│                                                       │
-│   ┌──────────────────────────────────────────┐        │
-│   │  enricher                                │        │
-│   │  - polls NAS queue                       │        │
-│   │  - asks Ollama vision model to:          │        │
-│   │      • re-score                          │        │
-│   │      • pick the best photo               │        │
-│   │      • write 1-sentence caption          │        │
-│   │  - writes back: enriched=true            │        │
-│   └──────────────────────────────────────────┘        │
-└───────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph NAS["NAS (always on)"]
+        Immich["Immich API"]
+        Scout["scout (daily cron)<br>- fetch memories<br>- score them<br>- enqueue if special"]
+        Queue["queue.sqlite<br>(pending / sent /<br>hidden / blocked)"]
+        Sender["sender<br>- drains queue<br>- posts to ntfy"]
+        Ntfy["ntfy"]
+        
+        Immich --> Scout
+        Scout --> Queue
+        Queue --> Sender
+        Sender --> Ntfy
+    end
+    
+    subgraph Framework["Framework Desktop (sometimes on)"]
+        Enricher["enricher<br>- polls NAS queue<br>- asks Ollama vision model to:<br>  • re-score<br>  • pick the best photo<br>  • write 1-sentence caption<br>- writes back: enriched=true"]
+    end
+    
+    Queue -.->|Tailscale, opportunistic| Enricher
+    
+    style Immich fill:#e1f5fe
+    style Scout fill:#f3e5f5
+    style Queue fill:#fff3e0
+    style Sender fill:#e8f5e8
+    style Ntfy fill:#fce4ec
+    style Enricher fill:#f1f8e9
+    style NAS fill:#f5f5f5
+    style Framework fill:#f9f9f9
 ```
 
 Three independent jobs, one shared SQLite queue. Each can fail without breaking the others.
