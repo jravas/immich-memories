@@ -22,17 +22,24 @@ Send fewer notifications, but make each one meaningful. Immich Memories uses int
 
 ## 🏗️ Architecture
 
-```
-┌─────────────┐    ┌──────────┐    ┌─────────────┐    ┌──────────┐    ┌─────────────┐
-│   Immich    │───▶│  Scout   │───▶│   Queue     │───▶│  Sender  │───▶│    ntfy     │
-│     API     │    │          │    │ (SQLite)    │    │          │    │  notifications│
-└─────────────┘    └──────────┘    └─────────────┘    └──────────┘    └─────────────┘
-                                                                │
-                                                                ▼
-                                                       ┌─────────────┐
-                                                       │ Hide Server │
-                                                       │ (Blocklist) │
-                                                       └─────────────┘
+```mermaid
+flowchart TD
+    Immich[Immich API] -->|GET /api/memories| Scout[Scout Service]
+    Scout -->|Score & Filter| Queue[(SQLite Queue)]
+    Queue -->|Pending Memories| Sender[Sender Service]
+    Sender -->|Rich Notifications| Ntfy[ntfy Server]
+    Ntfy -->|Push Notification| User[Mobile Device]
+    
+    User -->|Hide Forever Action| HideServer[Hide Server]
+    HideServer -->|Block Memory| Queue
+    
+    style Immich fill:#e1f5fe
+    style Scout fill:#f3e5f5
+    style Queue fill:#fff3e0
+    style Sender fill:#e8f5e8
+    style Ntfy fill:#fce4ec
+    style HideServer fill:#fff8e1
+    style User fill:#f1f8e9
 ```
 
 ## 🚀 Quick Start
