@@ -1,0 +1,29 @@
+services:
+  scout:
+    build: .
+    command: ["python", "scout.py", "--config", "config.yaml"]
+    environment:
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+
+  sender:
+    build: .
+    command: ["python", "sender.py", "--config", "config.yaml"]
+    environment:
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+
+  hide-server:
+    build: .
+    command: ["uvicorn", "hide_server:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro

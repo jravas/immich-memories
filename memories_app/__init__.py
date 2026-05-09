@@ -1,0 +1,1 @@
+"""Immich Memories application package."""
