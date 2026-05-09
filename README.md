@@ -163,40 +163,17 @@ Memories are scored based on:
 
 ### Project Structure
 
-```mermaid
-flowchart TD
-    Root["immich-memories/"]
-    
-    Scout["scout.py<br/>Memory discovery and scoring"]
-    Sender["sender.py<br/>Notification delivery"]
-    HideServer["hide_server.py<br/>Hide action API"]
-    Scheduler["run_scheduler.py<br/>Cron job manager"]
-    Enricher["enricher.py<br/>AI-powered enrichment"]
-    Config["config.yaml<br/>Main configuration"]
-    Compose["docker-compose.yml<br/>Container orchestration"]
-    Requirements["requirements.txt<br/>Python dependencies"]
-    Docs["docs/wiki/<br/>Detailed documentation"]
-    
-    Root --> Scout
-    Root --> Sender
-    Root --> HideServer
-    Root --> Scheduler
-    Root --> Enricher
-    Root --> Config
-    Root --> Compose
-    Root --> Requirements
-    Root --> Docs
-    
-    style Root fill:#f5f5f5
-    style Scout fill:#e3f2fd
-    style Sender fill:#e8f5e8
-    style HideServer fill:#ffebee
-    style Scheduler fill:#fff3e0
-    style Enricher fill:#f3e5f5
-    style Config fill:#fce4ec
-    style Compose fill:#e0f2f1
-    style Requirements fill:#f1f8e9
-    style Docs fill:#e8eaf6
+```
+immich-memories/
+├── scout.py           # Memory discovery and scoring
+├── sender.py          # Notification delivery
+├── hide_server.py     # Hide action API
+├── run_scheduler.py   # Cron job manager
+├── enricher.py        # AI-powered enrichment
+├── config.yaml        # Main configuration
+├── docker-compose.yml # Container orchestration
+├── requirements.txt   # Python dependencies
+└── docs/wiki/         # Detailed documentation
 ```
 
 ## 📚 Documentation
