@@ -1,0 +1,13 @@
+__pycache__
+*.py[cod]
+.git
+.cursor
+.claude
+.github
+.gemini
+bluetemberg-source
+llm
+data
+*.sqlite
+.env
+.env.*

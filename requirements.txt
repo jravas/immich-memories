@@ -2,5 +2,6 @@ fastapi
 httpx
 pydantic
 pyyaml
+reverse_geocoder
 structlog
 uvicorn

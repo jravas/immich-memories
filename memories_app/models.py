@@ -10,6 +10,7 @@ class Asset(BaseModel):
     isFavorite: bool = False
     people: list[object] = Field(default_factory=list)
     exifInfo: dict[str, object] | None = None
+    localDateTime: str | None = None
 
     @property
     def face_count(self) -> int:
@@ -33,12 +34,25 @@ class Asset(BaseModel):
     def local_date(self) -> datetime | None:
         exif = self.exifInfo or {}
         date_taken = exif.get("dateTimeOriginal")
-        if not isinstance(date_taken, str):
-            return None
-        try:
-            return datetime.fromisoformat(date_taken.replace("Z", "+00:00"))
-        except ValueError:
-            return None
+        if isinstance(date_taken, str):
+            try:
+                return datetime.fromisoformat(date_taken.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        if isinstance(self.localDateTime, str) and self.localDateTime:
+            try:
+                return datetime.fromisoformat(self.localDateTime.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        return None
+
+    @property
+    def exif_city(self) -> str | None:
+        exif = self.exifInfo or {}
+        city = exif.get("city")
+        if isinstance(city, str) and city.strip():
+            return city.strip()
+        return None
 
 
 class Memory(BaseModel):

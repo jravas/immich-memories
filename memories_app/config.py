@@ -23,10 +23,34 @@ class ScoutConfig(BaseModel):
     hide_action_url: str = "http://hide-server:8080/hide"
 
 
+class SchedulerConfig(BaseModel):
+    """Cron expressions for supercronic (minute hour dom mon dow)."""
+
+    scout_cron: str = "0 20 * * *"
+    sender_cron: str = "*/10 * * * *"
+
+
+class FiltersConfig(BaseModel):
+    """Album-based filtering for scoring and captions (Phase 1)."""
+
+    album_blacklist: list[str] = Field(
+        default_factory=lambda: [
+            "Screenshots",
+            "Documents",
+            "Work",
+            "WhatsApp",
+        ]
+    )
+    album_dump_asset_threshold: int = 500
+    max_album_lookups_per_memory: int = 12
+
+
 class AppConfig(BaseModel):
     immich: ImmichConfig
     ntfy: NtfyConfig
     scout: ScoutConfig = Field(default_factory=ScoutConfig)
+    scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+    filters: FiltersConfig = Field(default_factory=FiltersConfig)
     queue_db_path: str = "data/queue.sqlite"
 
 

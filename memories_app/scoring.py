@@ -27,7 +27,13 @@ def is_anniversary(memory_date: str, today: date, years: tuple[int, ...] = (1, 2
     return years_ago(memory_date, today) in years
 
 
-def score_memory(memory: Memory, home_gps: tuple[float, float], today: date) -> tuple[int, float]:
+def score_memory(
+    memory: Memory,
+    home_gps: tuple[float, float],
+    today: date,
+    *,
+    has_named_album: bool,
+) -> tuple[int, float]:
     score = 0
     n = memory.photo_count
     if n >= 20:
@@ -41,8 +47,11 @@ def score_memory(memory: Memory, home_gps: tuple[float, float], today: date) -> 
     if has_starred_photo:
         score += 3
 
-    if memory.isSaved:
+    if has_named_album:
         score += 3
+
+    if memory.isSaved:
+        score += 2
 
     longest_span_hours = _span_hours(memory)
     if longest_span_hours >= 4:

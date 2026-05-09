@@ -1,7 +1,23 @@
 services:
-  scout:
+  scheduler:
     build: .
-    command: ["python", "scout.py", "--config", "config.yaml"]
+    command: ["python", "run_scheduler.py"]
+    environment:
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - CONFIG_PATH=/app/config.yaml
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      hide-server:
+        condition: service_healthy
+
+  scout:
+    profiles:
+      - manual
+    build: .
+    command: ["python", "scout.py", "--config", "/app/config.yaml"]
     environment:
       - IMMICH_API_KEY=${IMMICH_API_KEY}
     volumes:
@@ -9,8 +25,10 @@ services:
       - ./config.yaml:/app/config.yaml:ro
 
   sender:
+    profiles:
+      - manual
     build: .
-    command: ["python", "sender.py", "--config", "config.yaml"]
+    command: ["python", "sender.py", "--config", "/app/config.yaml"]
     environment:
       - IMMICH_API_KEY=${IMMICH_API_KEY}
     volumes:
@@ -22,8 +40,21 @@ services:
     command: ["uvicorn", "hide_server:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - CONFIG_PATH=/app/config.yaml
     ports:
       - "8080:8080"
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/openapi.json', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

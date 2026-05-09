@@ -11,4 +11,17 @@ scout:
   home_gps: [45.8150, 15.9819]
   hide_action_url: "http://hide-server:8080/hide"
 
+filters:
+  album_blacklist:
+    - "Screenshots"
+    - "Documents"
+    - "Work"
+    - "WhatsApp"
+  album_dump_asset_threshold: 500
+  max_album_lookups_per_memory: 12
+
+scheduler:
+  scout_cron: "0 20 * * *"
+  sender_cron: "*/10 * * * *"
+
 queue_db_path: "data/queue.sqlite"

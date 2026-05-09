@@ -30,7 +30,7 @@ def main() -> None:
 
     rows = connection.execute(
         """
-        SELECT id, memory_id, memory_date, year, asset_id, caption, status
+        SELECT id, memory_id, memory_date, year, asset_id, city, caption, status
         FROM queue
         WHERE status IN ('pending', 'enriched')
         ORDER BY created_at ASC
@@ -54,7 +54,7 @@ def main() -> None:
                 f"{urllib.parse.quote(row['memory_id'], safe='')}"
             )
             headers = {
-                "Title": f"{_years_ago(row['memory_date'])} years ago",
+                "Title": make_title(_years_ago(row["memory_date"]), row["city"]),
                 "Tags": "frame_with_picture",
                 "Priority": "default",
                 "Click": f"immich://asset/{row['asset_id']}",
@@ -80,6 +80,12 @@ def main() -> None:
 def _years_ago(memory_date: str) -> int:
     year = datetime.fromisoformat(memory_date).year
     return datetime.now(tz=timezone.utc).year - year
+
+
+def make_title(years_ago: int, city: str | None) -> str:
+    if not city:
+        return f"{years_ago} years ago"
+    return f"{years_ago} years ago in {city}"
 
 
 def mark_as_sent(connection, queue_id: int) -> None:
