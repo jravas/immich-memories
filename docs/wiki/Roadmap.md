@@ -14,12 +14,12 @@ This roadmap tracks execution priorities from `plan.md`.
 - [x] Album scoring via `GET /api/albums?assetId=` + blacklist / dump-album threshold
 - [x] Scheduler (supercronic; cron from `config.yaml`)
 
-## Phase 2 (LLM enricher)
+## Phase 2 (LLM enricher) — complete
 
-- [ ] `enricher.py` worker on Framework desktop
-- [ ] Queue API endpoints for pending/update
-- [ ] Ollama vision model integration (`qwen2.5vl:7b`, fallback `moondream2`)
-- [ ] Strict JSON output parsing and heuristic fallback
+- [x] `enricher.py` worker on Framework desktop
+- [x] Queue API endpoints for pending/update
+- [x] Ollama vision model integration (`qwen2.5vl:7b`, fallback `moondream2`)
+- [x] Strict JSON output parsing and heuristic fallback
 
 ## Phase 3 (optional polish)
 
