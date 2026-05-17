@@ -1,6 +1,30 @@
 services:
+  ntfy:
+    image: binwiederhier/ntfy
+    command: serve
+    environment:
+      - TZ=${TZ:-UTC}
+      - NTFY_BASE_URL=http://homelab.fritz.box:2586
+      - NTFY_ATTACHMENT_CACHE_DIR=/var/cache/ntfy/attachments
+      - NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT=1G
+      - NTFY_ATTACHMENT_FILE_SIZE_LIMIT=15m
+      - NTFY_ATTACHMENT_EXPIRY_DURATION=3h
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+      - ntfy-etc:/etc/ntfy
+    ports:
+      - "2586:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--tries=1", "--spider", "http://localhost:80/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
   scheduler:
     build: .
+    init: true
     command: ["python", "run_scheduler.py"]
     environment:
       - IMMICH_API_KEY=${IMMICH_API_KEY}
@@ -12,6 +36,9 @@ services:
     depends_on:
       hide-server:
         condition: service_healthy
+      ntfy:
+        condition: service_healthy
+    restart: unless-stopped
 
   scout:
     profiles:
@@ -42,7 +69,7 @@ services:
       - IMMICH_API_KEY=${IMMICH_API_KEY}
       - CONFIG_PATH=/app/config.yaml
     ports:
-      - "8080:8080"
+      - "8090:8080"
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
@@ -58,3 +85,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  ntfy-cache:
+  ntfy-etc:
