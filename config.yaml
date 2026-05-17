@@ -1,15 +1,16 @@
 immich:
-  base_url: "http://immich-server:2283"
+  base_url: "http://192.168.178.24:2283"
   api_key: "${IMMICH_API_KEY}"
+  external_url: "https://immich.pipicorp.uk"
 
 ntfy:
-  base_url: "http://ntfy"
+  base_url: "http://ntfy:80"
   topic: "memories"
 
 scout:
   threshold: 5
   home_gps: [45.8150, 15.9819]
-  hide_action_url: "http://hide-server:8080/hide"
+  hide_action_url: "http://homelab.fritz.box:8090/hide"
 
 filters:
   album_blacklist:

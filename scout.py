@@ -270,10 +270,10 @@ def upsert_queue_item(
     memory_date: str,
     year: int,
     asset_id: str,
-    candidate_assets: list[str] | None = None,
     score: int,
     city: str | None,
     caption: str,
+    candidate_assets: list[str] | None = None,
 ) -> None:
     candidate_json = json.dumps(candidate_assets) if candidate_assets else None
     connection.execute(

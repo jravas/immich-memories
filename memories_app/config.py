@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class ImmichConfig(BaseModel):
     base_url: str
     api_key: str
+    external_url: str = ""  # Public URL the mobile app is configured with (for deep links)
 
 
 class NtfyConfig(BaseModel):

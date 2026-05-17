@@ -20,7 +20,9 @@ def haversine_km(origin: tuple[float, float], destination: tuple[float, float]) 
 
 
 def years_ago(memory_date: str, today: date) -> int:
-    return max(today.year - date.fromisoformat(memory_date).year, 0)
+    # Trim time component if present (e.g. "2025-05-17T00:00:00.000Z" → "2025-05-17")
+    date_part = memory_date[:10]
+    return max(today.year - date.fromisoformat(date_part).year, 0)
 
 
 def is_anniversary(memory_date: str, today: date, years: tuple[int, ...] = (1, 2, 5, 10, 20)) -> bool:

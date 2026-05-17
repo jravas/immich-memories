@@ -43,6 +43,8 @@ def main() -> None:
         logger.info("sender.empty")
         return
 
+    immich_headers = {"x-api-key": config.immich.api_key}
+
     with httpx.Client(timeout=30.0) as client:
         for row in rows:
             notification_url = f"{config.ntfy.base_url.rstrip('/')}/{config.ntfy.topic}"
@@ -53,17 +55,38 @@ def main() -> None:
                 f"{config.scout.hide_action_url}?memory_id="
                 f"{urllib.parse.quote(row['memory_id'], safe='')}"
             )
+            # immich://asset?id={uuid} is the correct deep link format (host=intent, id=query param)
+            immich_web_url = f"immich://asset?id={row['asset_id']}"
+            # Download thumbnail from Immich (requires auth) and send as body
+            thumbnail_bytes: bytes | None = None
+            thumbnail_content_type = "image/jpeg"
+            try:
+                thumb_response = client.get(thumbnail_url, headers=immich_headers)
+                thumb_response.raise_for_status()
+                thumbnail_bytes = thumb_response.content
+                thumbnail_content_type = thumb_response.headers.get("content-type", "image/jpeg")
+            except httpx.HTTPError as err:
+                logger.warning("sender.thumbnail_fetch_failed", asset_id=row["asset_id"], error=str(err))
+
+            ext = "webp" if "webp" in thumbnail_content_type else "jpg"
             headers = {
                 "Title": make_title(_years_ago(row["memory_date"]), row["city"]),
+                "Message": row["caption"],
                 "Tags": "frame_with_picture",
                 "Priority": "default",
-                "Click": f"immich://asset/{row['asset_id']}",
-                "Attach": thumbnail_url,
+                "Click": immich_web_url,
                 "Actions": f"view, Hide forever, {hide_url}, method=POST",
             }
+            if thumbnail_bytes:
+                headers["Filename"] = f"memory.{ext}"
+                headers["Content-Type"] = thumbnail_content_type
 
             try:
-                response = client.post(notification_url, content=row["caption"], headers=headers)
+                response = client.post(
+                    notification_url,
+                    content=thumbnail_bytes or row["caption"].encode(),
+                    headers=headers,
+                )
                 response.raise_for_status()
                 mark_as_sent(connection, queue_id=row["id"])
                 logger.info("sender.sent", queue_id=row["id"], memory_id=row["memory_id"])
