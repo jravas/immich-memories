@@ -6,17 +6,35 @@
 
 ```mermaid
 flowchart TD
-  Immich["Immich API"] --> Scout["scout.py"]
-  Scout --> Queue["queue.sqlite"]
-  Queue --> Sender["sender.py"]
-  Sender --> Ntfy["ntfy topic"]
-  Ntfy --> Phone["Mobile notification"]
-  Phone -->|Hide forever action| HideServer["hide_server.py"]
-  HideServer --> Queue
+  subgraph NAS["NAS (always on)"]
+    Immich["Immich API"] --> Scout["scout.py"]
+    Scout --> Queue["queue.sqlite"]
+    Queue --> Sender["sender.py"]
+    Sender --> Ntfy["ntfy topic"]
+    Ntfy --> Phone["Mobile notification"]
+    Phone -->|Hide forever action| HideServer["hide_server.py"]
+    HideServer --> Queue
+  end
+
+  subgraph Framework["Framework Desktop (sometimes on)"]
+    Enricher["enricher.py"]
+  end
+
+  Queue -.->|Tailscale /queue/pending| Enricher
+  Enricher -.->|/queue/update| Queue
 ```
 
 ## Components
 
+- `enricher.py` (Phase 2 — runs on Framework Desktop)
+  - Polls `GET /queue/pending` on the NAS hide-server every `enricher.poll_interval_minutes`
+  - Fetches preview thumbnails for up to 5 candidate assets per memory from Immich
+  - Calls local Ollama (`qwen2.5vl:7b`, fallback `moondream2`) with images + context
+  - Receives structured JSON `{score, best_index, caption}` — parses with pydantic
+  - POSTs result to `/queue/update`: status becomes `enriched` (score ≥ 5) or `skipped`
+  - Falls back silently to heuristic caption if both models fail
+  - Logs per-cycle metrics: success rate and avg latency
+  - Auth: bearer token from `ENRICHER_SECRET` env var
 - `scout.py`
   - Calls `GET /api/memories` with `type=on_this_day`
   - Optionally calls `GET /api/albums?assetId=` (sampled assets per memory) for album names — boosts score when a non-blacklisted, non-dump album matches
@@ -38,7 +56,7 @@ flowchart TD
 
 ## Data model
 
-Two tables are used in Phase 1:
+Two tables are shared across Phase 1 and Phase 2:
 
 - `queue`
   - Holds queued notifications and delivery state

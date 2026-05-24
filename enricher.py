@@ -6,9 +6,9 @@ Phase 2 LLM Enricher - runs on Framework desktop, enhances queued memories with 
 from __future__ import annotations
 
 import base64
-import json
 import os
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,9 +26,44 @@ logger = structlog.get_logger("enricher")
 
 class EnrichmentResponse(BaseModel):
     """Structured response from vision model."""
-    score: int  # 0-10 for memory worthiness
+
+    score: int       # 0-10 for memory worthiness
     best_index: int  # which photo is best (0-based)
-    caption: str  # max 12 words, no exclamation marks
+    caption: str     # max 12 words, no exclamation marks
+
+
+@dataclass
+class CycleMetrics:
+    attempted: int = 0
+    enriched: int = 0
+    skipped: int = 0
+    failed: int = 0
+    latencies: list[float] = field(default_factory=list)
+
+    def record(self, outcome: str, latency_s: float) -> None:
+        self.attempted += 1
+        self.latencies.append(latency_s)
+        if outcome == "enriched":
+            self.enriched += 1
+        elif outcome == "skipped":
+            self.skipped += 1
+        else:
+            self.failed += 1
+
+    def log(self) -> None:
+        if not self.attempted:
+            return
+        avg_latency = sum(self.latencies) / len(self.latencies)
+        success_rate = (self.enriched + self.skipped) / self.attempted
+        logger.info(
+            "enricher.cycle_metrics",
+            attempted=self.attempted,
+            enriched=self.enriched,
+            skipped=self.skipped,
+            failed=self.failed,
+            success_rate=round(success_rate, 2),
+            avg_latency_s=round(avg_latency, 1),
+        )
 
 
 class Enricher:
@@ -38,14 +73,18 @@ class Enricher:
         self.nas_client = httpx.Client(
             base_url=self.enricher_config.nas_url,
             timeout=30.0,
-            headers={"Authorization": f"Bearer {self.enricher_config.shared_secret}"}
+            headers={"Authorization": f"Bearer {self.enricher_config.shared_secret}"},
         )
         self.immich_client = httpx.Client(
             base_url=self.config.immich.base_url,
             headers={"x-api-key": self.config.immich.api_key},
             timeout=30.0,
         )
-        
+        self.ollama_client = ollama.Client(
+            host=self.enricher_config.ollama_url,
+            timeout=self.enricher_config.timeout_seconds,
+        )
+
     def get_pending_memories(self) -> list[dict[str, Any]]:
         """Fetch pending memories from NAS queue API."""
         try:
@@ -62,134 +101,94 @@ class Enricher:
             logger.error("enricher.failed_to_fetch_pending", error=str(e))
             return []
 
-    def fetch_candidate_thumbnails(self, memory_id: str, asset_ids: list[str]) -> list[bytes]:
-        """Fetch thumbnails for top candidate photos."""
+    def fetch_candidate_thumbnails(self, asset_ids: list[str]) -> list[bytes]:
+        """Fetch preview thumbnails for top candidate photos."""
         thumbnails = []
-        for asset_id in asset_ids[:5]:  # Max 5 candidates
+        for asset_id in asset_ids[:5]:
             try:
                 response = self.immich_client.get(
                     f"/api/assets/{asset_id}/thumbnail",
-                    params={"size": "preview"},  # Larger than thumbnail for better AI analysis
+                    params={"size": "preview"},
                 )
                 response.raise_for_status()
                 thumbnails.append(response.content)
             except httpx.HTTPStatusError as e:
-                logger.warning("enricher.thumbnail_http_error", asset_id=asset_id, status_code=e.response.status_code, error=str(e))
+                logger.warning("enricher.thumbnail_http_error", asset_id=asset_id, status_code=e.response.status_code)
             except httpx.RequestError as e:
                 logger.warning("enricher.thumbnail_network_error", asset_id=asset_id, error=str(e))
             except Exception as e:
                 logger.warning("enricher.failed_thumbnail", asset_id=asset_id, error=str(e))
         return thumbnails
 
-    def call_vision_model(self, memory: dict[str, Any], thumbnails: list[bytes]) -> EnrichmentResponse | None:
-        """Call Ollama vision model to score and select best photo."""
-        if not thumbnails:
-            return None
-
-        # Prepare system prompt
-        system_prompt = """You are scoring memory-worthiness for a personal photo app.
-        
-Rules:
-- Score 0-10 for "worth surfacing as a memory" (10 = very special)
-- Pick the single best photo index (0-based)
-- Write one sentence caption (max 12 words, no exclamation marks)
-- Use past tense, second person ("You were...")
-- Only state what you can see, don't invent details
-- Reply as JSON: {"score": int, "best_index": int, "caption": str}"""
-
-        # Prepare user message with context
-        user_msg_parts = [
-            f"Here are {len(thumbnails)} photos from {memory['memory_date']}, {memory['year']} years ago.",
+    def _build_ollama_message(self, memory: dict[str, Any], thumbnails: list[bytes]) -> dict[str, Any]:
+        years_elapsed = datetime.now(timezone.utc).year - memory["year"]
+        parts = [
+            f"Here are {len(thumbnails)} photos from {memory['memory_date']}, {years_elapsed} years ago.",
         ]
-        
-        if memory.get('city'):
-            user_msg_parts.append(f"Location: {memory['city']}")
-        
-        user_msg_parts.extend([
+        if memory.get("city"):
+            parts.append(f"Location: {memory['city']}")
+        parts.extend([
             "Tasks:",
             "1) Score this day 0-10 for memory worthiness",
             "2) Pick the single best photo (return index)",
             "3) Write one sentence caption (max 12 words)",
             "Reply as JSON only.",
         ])
-
-        # Prepare message with images
-        message = {
+        return {
             "role": "user",
-            "content": [{"type": "text", "text": "\n".join(user_msg_parts)}],
+            "content": "\n".join(parts),
+            "images": [base64.b64encode(t).decode() for t in thumbnails],
         }
-        
-        # Add images to message
-        for i, thumbnail in enumerate(thumbnails):
-            message["content"].append({
-                "type": "image_url",
-                "image_url": f"data:image/jpeg;base64,{base64.b64encode(thumbnail).decode()}"
-            })
 
+    def _chat(self, model: str, system_prompt: str, user_message: dict[str, Any]) -> EnrichmentResponse | None:
+        """Call a single Ollama model and return parsed response, or None on failure."""
         try:
-            # Try primary model first
-            response = ollama.chat(
-                model=self.enricher_config.vision_model,
+            response = self.ollama_client.chat(
+                model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    message,
-                ],
-                format="json",
-                options={"temperature": 0.1},  # Low temperature for consistent output
-            )
-            
-            return EnrichmentResponse.model_validate_json(response.message.content)
-            
-        except ollama.ResponseError as e:
-            logger.error("enricher.model_not_found", model=self.enricher_config.vision_model, error=str(e))
-            # Model doesn't exist, try fallback immediately
-        except (ollama.RequestError, ollama.OllamaError) as e:
-            logger.warning("enricher.primary_model_failed", model=self.enricher_config.vision_model, error=str(e))
-            # Network or server error, try fallback
-        except ValidationError as e:
-            logger.error("enricher.invalid_response", model=self.enricher_config.vision_model, error=str(e))
-            # Invalid JSON response, try fallback
-        except Exception as e:
-            logger.error("enricher.unexpected_error", model=self.enricher_config.vision_model, error=str(e))
-            # Unexpected error, try fallback
-            
-        # Try fallback model
-        try:
-            response = ollama.chat(
-                model=self.enricher_config.fallback_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    message,
+                    user_message,
                 ],
                 format="json",
                 options={"temperature": 0.1},
             )
-            
             return EnrichmentResponse.model_validate_json(response.message.content)
-            
         except ollama.ResponseError as e:
-            logger.error("enricher.fallback_model_not_found", 
-                       model=self.enricher_config.fallback_model, 
-                       error=str(e))
-            return None
+            logger.error("enricher.model_not_found", model=model, error=str(e))
         except (ollama.RequestError, ollama.OllamaError) as e:
-            logger.error("enricher.fallback_model_failed", 
-                       model=self.enricher_config.fallback_model,
-                       error=str(e))
-            return None
+            logger.warning("enricher.model_failed", model=model, error=str(e))
         except ValidationError as e:
-            logger.error("enricher.fallback_invalid_response", 
-                       model=self.enricher_config.fallback_model,
-                       error=str(e))
-            return None
+            logger.error("enricher.invalid_response", model=model, error=str(e))
         except Exception as e:
-            logger.error("enricher.fallback_unexpected_error", 
-                       model=self.enricher_config.fallback_model,
-                       error=str(e))
+            logger.error("enricher.unexpected_error", model=model, error=str(e))
+        return None
+
+    def call_vision_model(self, memory: dict[str, Any], thumbnails: list[bytes]) -> EnrichmentResponse | None:
+        """Call Ollama vision model, falling back to secondary model on failure."""
+        if not thumbnails:
             return None
 
+        system_prompt = (
+            "You are scoring memory-worthiness for a personal photo app.\n\n"
+            "Rules:\n"
+            "- Score 0-10 for \"worth surfacing as a memory\" (10 = very special)\n"
+            "- Pick the single best photo index (0-based)\n"
+            "- Write one sentence caption (max 12 words, no exclamation marks)\n"
+            "- Use past tense, second person (\"You were...\")\n"
+            "- Only state what you can see, don't invent details\n"
+            "- Reply as JSON: {\"score\": int, \"best_index\": int, \"caption\": str}"
+        )
+        user_message = self._build_ollama_message(memory, thumbnails)
+
+        result = self._chat(self.enricher_config.vision_model, system_prompt, user_message)
+        if result is not None:
+            return result
+
+        logger.info("enricher.trying_fallback", fallback_model=self.enricher_config.fallback_model)
+        return self._chat(self.enricher_config.fallback_model, system_prompt, user_message)
+
     def update_memory(self, memory_id: str, enrichment: EnrichmentResponse, chosen_asset_id: str) -> bool:
-        """Update memory on NAS with enrichment results."""
+        """Push enrichment results back to NAS queue API."""
         try:
             response = self.nas_client.post(
                 "/queue/update",
@@ -198,7 +197,7 @@ Rules:
                     "asset_id": chosen_asset_id,
                     "caption": enrichment.caption,
                     "status": "enriched" if enrichment.score >= 5 else "skipped",
-                }
+                },
             )
             response.raise_for_status()
             return True
@@ -212,67 +211,70 @@ Rules:
             logger.error("enricher.failed_to_update", memory_id=memory_id, error=str(e))
             return False
 
-    def process_memory(self, memory: dict[str, Any]) -> bool:
-        """Process a single memory through LLM enrichment."""
-        logger.info("enricher.processing_memory", memory_id=memory['memory_id'])
-        
-        # Get candidate thumbnails
-        thumbnails = self.fetch_candidate_thumbnails(
-            memory['memory_id'], 
-            memory.get('candidate_asset_ids', [memory['asset_id']])
-        )
-        
+    def process_memory(self, memory: dict[str, Any], metrics: CycleMetrics) -> None:
+        """Process a single memory through LLM enrichment, updating metrics in-place."""
+        memory_id = memory["memory_id"]
+        logger.info("enricher.processing_memory", memory_id=memory_id)
+        t0 = time.monotonic()
+
+        candidate_ids: list[str] = memory.get("candidate_asset_ids") or [memory["asset_id"]]
+        thumbnails = self.fetch_candidate_thumbnails(candidate_ids)
+
         if not thumbnails:
-            logger.warning("enricher.no_thumbnails", memory_id=memory['memory_id'])
-            return False
-        
-        # Call vision model
+            logger.warning("enricher.no_thumbnails", memory_id=memory_id)
+            metrics.record("failed", time.monotonic() - t0)
+            return
+
         enrichment = self.call_vision_model(memory, thumbnails)
         if not enrichment:
-            logger.warning("enricher.vision_failed", memory_id=memory['memory_id'])
-            return False
-        
-        # Determine chosen asset
-        candidate_assets = memory.get('candidate_asset_ids', [memory['asset_id']])
-        if enrichment.best_index < len(candidate_assets):
-            chosen_asset_id = candidate_assets[enrichment.best_index]
+            logger.warning("enricher.vision_failed", memory_id=memory_id)
+            metrics.record("failed", time.monotonic() - t0)
+            return
+
+        chosen_asset_id = (
+            candidate_ids[enrichment.best_index]
+            if enrichment.best_index < len(candidate_ids)
+            else memory["asset_id"]
+        )
+
+        outcome = "enriched" if enrichment.score >= 5 else "skipped"
+        if self.update_memory(memory_id, enrichment, chosen_asset_id):
+            logger.info(
+                "enricher.memory_processed",
+                memory_id=memory_id,
+                score=enrichment.score,
+                outcome=outcome,
+                caption=enrichment.caption,
+            )
+            metrics.record(outcome, time.monotonic() - t0)
         else:
-            chosen_asset_id = memory['asset_id']
-        
-        # Update memory
-        success = self.update_memory(memory['memory_id'], enrichment, chosen_asset_id)
-        if success:
-            logger.info("enricher.memory_enriched", 
-                        memory_id=memory['memory_id'],
-                        score=enrichment.score,
-                        caption=enrichment.caption)
-        
-        return success
+            metrics.record("failed", time.monotonic() - t0)
 
     def run_once(self) -> None:
         """Run one enrichment cycle."""
         logger.info("enricher.cycle_start")
-        
-        pending_memories = self.get_pending_memories()
-        if not pending_memories:
+
+        pending = self.get_pending_memories()
+        if not pending:
             logger.info("enricher.no_pending_memories")
             return
-        
-        logger.info("enricher.found_pending", count=len(pending_memories))
-        
-        for memory in pending_memories:
+
+        logger.info("enricher.found_pending", count=len(pending))
+        metrics = CycleMetrics()
+
+        for memory in pending:
             try:
-                self.process_memory(memory)
+                self.process_memory(memory, metrics)
             except Exception as e:
-                logger.error("enricher.processing_error", 
-                           memory_id=memory.get('memory_id'), 
-                           error=str(e))
-    
+                logger.error("enricher.processing_error", memory_id=memory.get("memory_id"), error=str(e))
+                metrics.record("failed", 0.0)
+
+        metrics.log()
+
     def run(self) -> None:
         """Run continuous enrichment loop."""
-        logger.info("enricher.start", 
-                   poll_interval=self.enricher_config.poll_interval_minutes)
-        
+        logger.info("enricher.start", poll_interval=self.enricher_config.poll_interval_minutes)
+
         while True:
             try:
                 self.run_once()
@@ -282,13 +284,12 @@ Rules:
                 break
             except Exception as e:
                 logger.error("enricher.unexpected_error", error=str(e))
-                time.sleep(60)  # Wait 1 minute before retrying
+                time.sleep(60)
 
 
-def main():
+def main() -> None:
     config_path = os.environ.get("CONFIG_PATH", "config.yaml")
-    enricher = Enricher(config_path)
-    enricher.run()
+    Enricher(config_path).run()
 
 
 if __name__ == "__main__":

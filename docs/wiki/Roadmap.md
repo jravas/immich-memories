@@ -17,9 +17,12 @@ This roadmap tracks execution priorities from `plan.md`.
 ## Phase 2 (LLM enricher) — complete
 
 - [x] `enricher.py` worker on Framework desktop
-- [x] Queue API endpoints for pending/update
+- [x] Queue API endpoints for pending/update with shared-secret auth
 - [x] Ollama vision model integration (`qwen2.5vl:7b`, fallback `moondream2`)
 - [x] Strict JSON output parsing and heuristic fallback
+- [x] Configurable Ollama URL (`enricher.ollama_url`) and timeout
+- [x] Per-cycle metrics: success rate and avg latency logged to stdout
+- [x] `enricher` docker-compose service (profile: `framework`) for Framework Desktop
 
 ## Phase 3 (optional polish)
 

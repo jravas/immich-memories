@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict
 
@@ -84,7 +85,6 @@ def get_pending_memories(authenticated: bool = Depends(verify_enricher_auth)) ->
         # Parse candidate assets from JSON, fallback to current asset_id
         if memory["candidate_assets"]:
             try:
-                import json
                 memory["candidate_asset_ids"] = json.loads(memory["candidate_assets"])
             except (json.JSONDecodeError, TypeError):
                 memory["candidate_asset_ids"] = [memory["asset_id"]]
@@ -102,28 +102,21 @@ def get_pending_memories(authenticated: bool = Depends(verify_enricher_auth)) ->
 @app.post("/queue/update")
 def update_memory(request: QueueUpdateRequest, authenticated: bool = Depends(verify_enricher_auth)) -> dict[str, str]:
     """Update a memory with enrichment results."""
-    try:
-        connection.execute(
-            """
-            UPDATE queue
-            SET asset_id = ?, caption = ?, status = ?, enriched_at = CURRENT_TIMESTAMP
-            WHERE memory_id = ? AND status = 'pending'
-            """,
-            (request.asset_id, request.caption, request.status, request.memory_id),
-        )
-        connection.commit()
-        
-        if connection.total_changes == 0:
-            raise HTTPException(status_code=404, detail="Memory not found or not pending")
-        
-        logger.info("hide_server.memory_updated", 
-                   memory_id=request.memory_id,
-                   asset_id=request.asset_id,
-                   status=request.status)
-        return {"status": "ok"}
-        
-    except Exception as e:
-        logger.error("hide_server.update_failed", 
-                    memory_id=request.memory_id,
-                    error=str(e))
-        raise HTTPException(status_code=500, detail="Update failed")
+    cursor = connection.execute(
+        """
+        UPDATE queue
+        SET asset_id = ?, caption = ?, status = ?, enriched_at = CURRENT_TIMESTAMP
+        WHERE memory_id = ? AND status = 'pending'
+        """,
+        (request.asset_id, request.caption, request.status, request.memory_id),
+    )
+    connection.commit()
+
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Memory not found or not pending")
+
+    logger.info("hide_server.memory_updated",
+               memory_id=request.memory_id,
+               asset_id=request.asset_id,
+               status=request.status)
+    return {"status": "ok"}
