@@ -67,6 +67,7 @@ services:
     command: ["uvicorn", "hide_server:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - ENRICHER_SECRET=${ENRICHER_SECRET}
       - CONFIG_PATH=/app/config.yaml
     ports:
       - "8090:8080"
@@ -85,6 +86,20 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+
+  enricher:
+    profiles:
+      - framework
+    build: .
+    command: ["python", "enricher.py"]
+    network_mode: host
+    environment:
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - ENRICHER_SECRET=${ENRICHER_SECRET}
+      - CONFIG_PATH=/app/config.yaml
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
 
 volumes:

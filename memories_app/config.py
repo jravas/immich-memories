@@ -48,10 +48,11 @@ class FiltersConfig(BaseModel):
 
 class EnricherConfig(BaseModel):
     """Phase 2 LLM enrichment settings."""
-    
+
     enabled: bool = True
     poll_interval_minutes: int = 30
     nas_url: str = "http://hide-server:8080"
+    ollama_url: str = "http://localhost:11434"
     vision_model: str = "qwen2.5vl:7b"
     fallback_model: str = "moondream2"
     timeout_seconds: int = 60
@@ -79,4 +80,6 @@ def load_config(path: str) -> AppConfig:
     raw = yaml.safe_load(Path(path).read_text()) or {}
     if "immich" in raw and "api_key" in raw["immich"]:
         raw["immich"]["api_key"] = _resolve_env(raw["immich"]["api_key"])
-    return AppConfig.model_validate(raw)
+    config = AppConfig.model_validate(raw)
+    config.enricher.shared_secret = _resolve_env(config.enricher.shared_secret)
+    return config
